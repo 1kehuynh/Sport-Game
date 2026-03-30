@@ -1,17 +1,25 @@
 import Phaser from 'phaser';
 import Player from './player.js';
+import Enemy from './enemies.js';
+import Goals from './goals.js';
 
-export default class MenuScene extends Phaser.Scene {
+export default class GameScene extends Phaser.Scene {
     constructor() {
-        super({ key: 'MenuScene' });
+        super({ key: 'GameScene' });
         this.player = null;
-        this.stars = null;
-        this.bombs = null;
-        this.platforms = null;
+        this.enemy = null;
+        this.ball = null;
+        this.goalsManager = null;
+        this.powerUps = null;
         this.cursors = null;
-        this.score = 0;
+        this.score = { player: 0, ai: 0 };
         this.gameOver = false;
         this.scoreText = null;
+        this.timerText = null;
+        this.gravityTimer = null;
+        this.startTime = null;
+        this.powerUpSpawnTimer = null;
+        this.effectTimer = null;
     }
 
     preload() {
@@ -23,55 +31,56 @@ export default class MenuScene extends Phaser.Scene {
     }
 
     create() {
-        //  A simple background for our game
+        // Field (ground)
         this.add.image(400, 300, 'sky');
+        const ground = this.physics.add.staticImage(400, 568, 'ground').setScale(2).refreshBody();
 
-        //  The platforms group contains the ground and the 2 ledges we can jump on
-        this.platforms = this.physics.add.staticGroup();
+        // Ball
+        this.ball = this.physics.add.sprite(400, 300, 'bomb');
+        this.ball.setBounce(0.8);
+        this.ball.setCollideWorldBounds(true);
+        this.ball.setDrag(10); // Slight air resistance
 
-        //  Here we create the ground.
-        //  Scale it to fit the width of the game (the original sprite is 400x32 in size)
-        this.platforms.create(400, 568, 'ground').setScale(2).refreshBody();
+        // Goals
+        this.goalsManager = new Goals(this, this.ball);
 
-        //  Now let's create some ledges
-        this.platforms.create(600, 400, 'ground');
-        this.platforms.create(50, 250, 'ground');
-        this.platforms.create(750, 220, 'ground');
+        // Power-ups
+        this.powerUps = this.physics.add.group();
 
-        // The player and its settings
-        this.player = new Player(this, 100, 450);
+        // Players
+        this.player = new Player(this, 200, 450);
+        this.enemy = new Enemy(this, 600, 450, this.ball);
 
-       
-
-        //  Input Events
+        // Input
         this.cursors = this.input.keyboard.createCursorKeys();
+        this.kickKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
 
-        //  Some stars to collect, 12 in total, evenly spaced 70 pixels apart along the x axis
-        this.stars = this.physics.add.group({
-            key: 'star',
-            repeat: 11,
-            setXY: { x: 12, y: 0, stepX: 70 }
+        // Score and timer text
+        this.scoreText = this.add.text(16, 16, 'Player: 0 | AI: 0', { fontSize: '24px', fill: '#000' });
+        this.timerText = this.add.text(600, 16, 'Time: 0', { fontSize: '24px', fill: '#000' });
+
+        // Colliders
+        this.physics.add.collider(this.player, ground);
+        this.physics.add.collider(this.enemy, ground);
+        this.physics.add.collider(this.ball, ground);
+
+        // Overlaps
+        this.physics.add.overlap(this.player, this.powerUps, this.collectPowerUp, null, this);
+
+
+        // Start timer
+        this.startTime = this.time.now;
+        this.gravityTimer = this.time.addEvent({
+            delay: 120000, // 2 minutes
+            callback: this.startGravityDecrease,
+            callbackScope: this
         });
-
-        this.stars.children.iterate((child) => {
-            //  Give each star a slightly different bounce
-            child.setBounceY(Phaser.Math.FloatBetween(0.4, 0.8));
+        this.powerUpSpawnTimer = this.time.addEvent({
+            delay: 15000, // Spawn every 15 seconds
+            callback: this.spawnPowerUp,
+            callbackScope: this,
+            loop: true
         });
-
-        this.bombs = this.physics.add.group();
-
-        //  The score
-        this.scoreText = this.add.text(16, 16, 'score: 0', { fontSize: '32px', fill: '#000' });
-
-        //  Collide the player and the stars with the platforms
-        this.physics.add.collider(this.player, this.platforms);
-        this.physics.add.collider(this.stars, this.platforms);
-        this.physics.add.collider(this.bombs, this.platforms);
-
-        //  Checks to see if the player overlaps with any of the stars, if he does call the collectStar function
-        this.physics.add.overlap(this.player, this.stars, this.collectStar, null, this);
-
-        this.physics.add.collider(this.player, this.bombs, this.hitBomb, null, this);
     }
 
     update() {
@@ -79,39 +88,65 @@ export default class MenuScene extends Phaser.Scene {
             return;
         }
 
+        // Update player
         this.player.update(this.cursors);
-    }
 
-    collectStar(player, star) {
-        star.disableBody(true, true);
+        // Update enemy
+        this.enemy.update();
 
-        //  Add and update the score
-        this.score += 10;
-        this.scoreText.setText('Score: ' + this.score);
+        // Kicking
+        if (Phaser.Input.Keyboard.JustDown(this.kickKey) && Phaser.Geom.Intersects.RectangleToRectangle(this.player.getBounds(), this.ball.getBounds())) {
+            const angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, this.ball.x, this.ball.y);
+            this.ball.setVelocity(Math.cos(angle) * 400, Math.sin(angle) * 400);
+        }
 
-        if (this.stars.countActive(true) === 0) {
-            //  A new batch of stars to collect
-            this.stars.children.iterate((child) => {
-                child.enableBody(true, child.x, 0, true, true);
-            });
+        // Update timer
+        const elapsed = Math.floor((this.time.now - this.startTime) / 1000);
+        this.timerText.setText('Time: ' + elapsed);
 
-            const x = (player.x < 400) ? Phaser.Math.Between(400, 800) : Phaser.Math.Between(0, 400);
-
-            const bomb = this.bombs.create(x, 16, 'bomb');
-            bomb.setBounce(1);
-            bomb.setCollideWorldBounds(true);
-            bomb.setVelocity(Phaser.Math.Between(-200, 200), 20);
-            bomb.allowGravity = false;
+        // Decrease gravity after 2 minutes
+        if (elapsed > 120) {
+            const gravityDecrease = Math.min((elapsed - 120) * 5, 250); // Decrease by 5 per second, max 250
+            this.physics.world.gravity.y = 300 - gravityDecrease;
         }
     }
 
-    hitBomb(player, bomb) {
-        this.physics.pause();
-
-        this.player.setTint(0xff0000);
-
-        this.player.anims.play('turn');
-
-        this.gameOver = true;
+    startGravityDecrease() {
+        // Add visual effect: change background or add text
+        this.add.text(350, 50, 'Low Gravity Mode!', { fontSize: '32px', fill: '#ff0000' });
     }
+
+    spawnPowerUp() {
+        const x = Phaser.Math.Between(100, 700);
+        const y = Phaser.Math.Between(100, 400);
+        const powerUp = this.powerUps.create(x, y, 'star'); // Using star as power-up sprite
+        powerUp.setBounceY(Phaser.Math.FloatBetween(0.4, 0.8));
+        powerUp.type = Phaser.Math.RND.pick(['gravityBoost', 'antiGravity']);
+        powerUp.setTint(powerUp.type === 'gravityBoost' ? 0x00ff00 : 0xff00ff);
+    }
+
+    collectPowerUp(player, powerUp) {
+        powerUp.disableBody(true, true);
+
+        if (powerUp.type === 'gravityBoost') {
+            // Temporarily increase gravity
+            this.physics.world.gravity.y = 500;
+            if (this.effectTimer) this.effectTimer.remove();
+            this.effectTimer = this.time.addEvent({
+                delay: 5000,
+                callback: () => { this.physics.world.gravity.y = 300; },
+                callbackScope: this
+            });
+        } else if (powerUp.type === 'antiGravity') {
+            // Temporarily reverse gravity
+            this.physics.world.gravity.y = -200;
+            if (this.effectTimer) this.effectTimer.remove();
+            this.effectTimer = this.time.addEvent({
+                delay: 10000,
+                callback: () => { this.physics.world.gravity.y = 300; },
+                callbackScope: this
+            });
+        }
+    }
+    
 }

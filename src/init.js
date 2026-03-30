@@ -1,5 +1,5 @@
 import Phaser from "phaser";
-import MenuScene from "./menu.js";    
+import GameScene from "./menu.js";    
 var config = {
     type: Phaser.AUTO,
     scale: {
@@ -16,7 +16,7 @@ var config = {
             debug: false
         }
     },
-    scene: [MenuScene]         
+    scene: [GameScene]         
 };
 
 var game = new Phaser.Game(config);
